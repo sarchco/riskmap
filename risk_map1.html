@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Global Risk Map</title>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>
+
+  <!-- XLSX -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+  <style>
+    body { margin: 0; background-color: #d3d3d3; font-family: sans-serif; }
+    #map { height: 100vh; width: 100%; }
+    #upload-box {
+      position: absolute; top: 10px; left: 10px; z-index: 9999;
+      background: white; padding: 10px 14px; border-radius: 8px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+    }
+  </style>
+</head>
+<body>
+  <div id="upload-box">
+    <label>Upload Excel File:</label>
+    <input type="file" id="excelFile" accept=".xlsx"/>
+  </div>
+  <div id="map"></div>
+
+  <script>
+    const map = L.map('map').setView([20, 0], 2);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+      maxZoom: 6,
+      attribution: '&copy; OpenStreetMap & CARTO'
+    }).addTo(map);
+
+    // Risk color scale (based on numeric value)
+    function getColor(risk) {
+      if (risk >= 5) return "red";
+      if (risk >= 3) return "orange";
+      if (risk >= 2) return "yellow";
+      return "green";
+    }
+
+    // Sleep helper to avoid API rate limit
+    const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+
+    // Geocode function using OpenStreetMap
+    async function geocodeLocation(location, country) {
+      const query = encodeURIComponent(`${location}, ${country}`);
+      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${query}`;
+      const res = await fetch(url, { headers: { 'User-Agent': 'risk-map/1.0' }});
+      const data = await res.json();
+      if (data.length > 0) {
+        return [parseFloat(data[0].lat), parseFloat(data[0].lon)];
+      }
+      return null;
+    }
+
+    document.getElementById('excelFile').addEventListener('change', handleFile);
+
+    async function handleFile(e) {
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        const data = new Uint8Array(event.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheetName = workbook.SheetNames[0];
+        const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
+        console.log("Loaded rows:", rows.length);
+
+        for (let row of rows) {
+          const location = row["Location"];
+          const country = row["Country"];
+          const riskValue = parseInt(row["Security & Safety Risk"]) || 0;
+          const color = getColor(riskValue);
+          const url = row["Module URL"] || `https://yourcompany.sharepoint.com/sites/risk/${location}`;
+
+          if (!location || !country) continue;
+
+          const coords = await geocodeLocation(location, country);
+          await sleep(800); // avoid rate limit (1 request/sec)
+
+          if (coords) {
+            L.circleMarker(coords, {
+              radius: 8,
+              color,
+              fillColor: color,
+              fillOpacity: 0.8
+            })
+            .addTo(map)
+            .bindPopup(`<b>${location}, ${country}</b><br>Risk: ${riskValue}<br><a href="${url}" target="_blank">Open Module</a>`)
+            .on('click', () => window.open(url, '_blank'));
+          } else {
+            console.warn("No coordinates found for", location, country);
+          }
+        }
+      };
+      reader.readAsArrayBuffer(e.target.files[0]);
+    }
+  </script>
+</body>
+</html>
